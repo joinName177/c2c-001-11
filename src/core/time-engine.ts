@@ -42,11 +42,80 @@ export function record(category: TimeCategory, hours: number, note: string, date
   return { id: `time-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, category, hours: Math.max(0.5, Number(hours) || 0.5), note: note.trim() || '未命名投资', date };
 }
 
+const DAY_MS = 86400000;
+
+/** 本地时区周一 00:00，作为账期起点（周一为一周第一天） */
+export function startOfWeek(date: Date): Date {
+  const start = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+  return start;
+}
+
+export function weekRange(date: Date): { start: Date; end: Date } {
+  const start = startOfWeek(date);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  return { start, end };
+}
+
+/** ISO-8601 周数，用于账期编号展示 */
+export function isoWeekNumber(date: Date): number {
+  const target = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  target.setUTCDate(target.getUTCDate() - ((target.getUTCDay() + 6) % 7) + 3);
+  const firstThursday = new Date(Date.UTC(target.getUTCFullYear(), 0, 4));
+  firstThursday.setUTCDate(firstThursday.getUTCDate() - ((firstThursday.getUTCDay() + 6) % 7) + 3);
+  return 1 + Math.round((target.getTime() - firstThursday.getTime()) / (7 * DAY_MS));
+}
+
+/** 记录日期距离当前账期相隔几周：0 = 本周，1 = 上周，以此类推 */
+export function weeksAgo(date: Date, now = new Date()): number {
+  return Math.round((startOfWeek(now).getTime() - startOfWeek(date).getTime()) / (7 * DAY_MS));
+}
+
+export interface WeekSummary {
+  label: string;
+  start: Date;
+  end: Date;
+  hours: number;
+  budget: number;
+}
+
+function hoursInWeek(records: InvestmentRecord[], weekStart: Date): number {
+  const startMs = weekStart.getTime();
+  return records
+    .filter((item) => startOfWeek(new Date(item.date)).getTime() === startMs)
+    .reduce((sum, item) => sum + item.hours, 0);
+}
+
+/** 按记录实际发生日期归入本周 / 上周账期，每笔记录只计入一个周期 */
+export function weeklySummaries(records: InvestmentRecord[], budget: number, now = new Date()): WeekSummary[] {
+  const thisStart = startOfWeek(now);
+  const lastStart = new Date(thisStart);
+  lastStart.setDate(lastStart.getDate() - 7);
+  return [
+    { label: '本周', ...weekRange(now), hours: hoursInWeek(records, thisStart), budget },
+    { label: '上周', ...weekRange(lastStart), hours: hoursInWeek(records, lastStart), budget },
+  ];
+}
+
+/** `<input type="date">` 需要的本地 YYYY-MM-DD 值 */
+export function toDateInputValue(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/** 把表单选择的日期转成本地正午的 ISO 时间，避免时区与夏令时让日期串天 */
+export function dateInputToIso(value: string): string {
+  const [year, month, day] = value.split('-').map(Number);
+  if (!year || !month || !day) return new Date().toISOString();
+  return new Date(year, month - 1, day, 12, 0, 0).toISOString();
+}
+
 export function sampleSnapshot() {
   const account: TimeAccount = { dailyHours: 8, weeklyHours: 56, updatedAt: new Date().toISOString() };
-  const seed: Array<[TimeCategory, number, string]> = [
-    ['事业', 16, '产品策略与交付'], ['学习', 10, '阅读与课程'], ['健康', 7, '力量训练与散步'],
-    ['关系', 8, '家人和朋友'], ['休息', 9, '睡眠与留白'], ['娱乐', 4, '电影与游戏'],
+  const seed: Array<[TimeCategory, number, string, number]> = [
+    ['事业', 16, '产品策略与交付', 1], ['学习', 10, '阅读与课程', 2], ['健康', 7, '力量训练与散步', 3],
+    ['关系', 8, '家人和朋友', 7], ['休息', 9, '睡眠与留白', 8], ['娱乐', 4, '电影与游戏', 10],
   ];
-  return { account, records: seed.map(([category, hours, note], index) => record(category, hours, note, new Date(Date.now() - index * 86400000).toISOString())) };
+  return { account, records: seed.map(([category, hours, note, daysBack]) => record(category, hours, note, new Date(Date.now() - daysBack * DAY_MS).toISOString())) };
 }
